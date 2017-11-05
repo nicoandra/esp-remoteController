@@ -507,6 +507,8 @@ void loop() {
   long newPosition = myEnc.read();
 
   if (newPosition != oldPosition) {
+    int up = newPosition > oldPosition ? 1  : 0;
+    int down = newPosition > oldPosition ? 0  : 1;
 
     if(newPosition < 0){
         newPosition = 0;
@@ -530,6 +532,14 @@ void loop() {
         if(channels[i] == 0){
           continue;
         }
+
+        if(abs(channels[i] - newPosition) > 30){
+          Serial.print("Too much of a diff in  channel #");
+          Serial.println(i);
+          continue;
+          
+        }
+
 
         channels[i] = newPosition;
         Serial.print("Set channel #");
