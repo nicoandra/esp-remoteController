@@ -7,10 +7,16 @@
 #include <DNSServer.h>            //Local DNS Server used for redirecting all requests to the configuration portal
 #include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager WiFi Configuration Magic
+#include "OneButton.h"
 
 Encoder myEnc(D1, D2);
 
-int channelId = -1;
+OneButton button(D3, true);
+
+long doubleClickEnterTime;
+int doubleClickModeEnabled = 0;
+
+int channelId = 0;
 int channels[8] = { 0,0,0,0,0,0,0,0 };
 long lastAnnounceTime = 0;
 
@@ -227,26 +233,6 @@ void notifyChanges(){
 
 }
 
-void updatePinValues(){
-  for(int i = 1; i < 8; i++){
-    int pinNumber = 1;
-    switch(i){
-      case 1: pinNumber = 5; break;
-      case 2: pinNumber = 4; break;
-      case 3: pinNumber = 0; break;
-      case 4: pinNumber = 2; break;
-      case 5: pinNumber = 14; break;
-      case 6: pinNumber = 12; break;
-      case 7: pinNumber = 13; break;
-      case 8: pinNumber = 15; break;
-    }
-
-    // pins[i - 1].setLevel(lightValues[i]);
-
-    analogWrite(pinNumber, lightValues[i]);
-  }
-}
-
 void mqttMessageCallback(char* topicParam, byte* payloadParam, unsigned int length) {
   allowAnnounce = 0;
   /*char topic[255];
@@ -259,31 +245,37 @@ void mqttMessageCallback(char* topicParam, byte* payloadParam, unsigned int leng
   char payload[255] = "";
   strncpy(payload, (char *)payloadParam, length);
 
+  /*
   Serial.print("Payload: ");
   Serial.print(payload);
+  */
 
   StaticJsonBuffer<SUB_BUFFER_SIZE> jsonBufferSub;
   JsonObject& jsonPayload = jsonBufferSub.parseObject(payload);
+  /*
   Serial.print(" - Parsed: ");
   jsonPayload.printTo(Serial);
   Serial.println("***");
+  */
 
 
   // TODO:: READ WHO SENT THE MESSAGE. IF IT'S MYSELF, IGNORE IT.
   if((String) topicParam == (String) "/controllers/"){
     JsonVariant sender = jsonPayload["mac_address"];
     if(!sender.success()){
-      Serial.print("No sender. Reject.");
+      // Serial.print("No sender. Reject.");
       return ;
     }
 
+    /*
     Serial.print("My MAC: ");
     Serial.println(macAddress());
     Serial.print("Sender: ");
     Serial.println(sender.as<char*>());
+    */
 
     if(macAddress() == sender.as<char*>()){
-      Serial.print("My own message. Reject.");
+      // Serial.print("My own message. Reject.");
       return ;
     }
 
@@ -299,7 +291,7 @@ void mqttMessageCallback(char* topicParam, byte* payloadParam, unsigned int leng
     for(int i = 0; i < values.size(); i++){
       channels[i] = values[i];
     }
-    myEnc.write(channels[channelId]);
+    // myEnc.write(channels[channelId]);
     return ;
   }
 
@@ -307,8 +299,6 @@ void mqttMessageCallback(char* topicParam, byte* payloadParam, unsigned int leng
   Serial.print(topicParam);
 
   allowAnnounce = 1;
-  updatePinValues();
-  // announce();
   return ;
 }
 
@@ -377,11 +367,72 @@ void cycle(){
 }
 
 
+void ledOn(){
+  digitalWrite(BUILTIN_LED, 0);
+}
+
+void ledOff(){
+  digitalWrite(BUILTIN_LED, 1);
+}
+
+
+void enableDoubleClick(){
+  channelId = 0;
+  doubleClickModeEnabled = 1;
+  doubleClickEnterTime = millis();
+  ledOn();
+  Serial.println("DOUBLECLICK Enabled!");
+}
+
+void disableDoubleClick(){
+  // channelId = 0;
+  doubleClickModeEnabled = 0;
+  doubleClickEnterTime = -1;
+  ledOff();
+  Serial.println("DOUBLECLICK Disabled!");
+}
+
+
+void myDoubleClickFunction(){
+  if(doubleClickModeEnabled == 1){
+    Serial.println("Leaving DOUBLECLICK mode on demand");
+    doubleClickModeEnabled = 0;
+    doubleClickEnterTime = -1;
+    return ;
+  }
+
+  enableDoubleClick();
+  return ;
+}
+
+
+void doubleClickModeTimeout(){
+  if(doubleClickModeEnabled == 0){
+    return ;
+  }
+
+  long now = millis();
+  if(now < doubleClickEnterTime || now - 100000 > doubleClickEnterTime){
+    Serial.println("Leaving DOUBLECLICK mode because of TIMEOUT");
+    disableDoubleClick();
+  }
+}
+
+void myClickFunction(){
+  moveToNextChannel();
+  disableDoubleClick();
+  Serial.print(" Channel >> ");
+  Serial.println(channelId);
+  oldPosition = channels[channelId];
+  myEnc.write(channels[channelId]);
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("Basic Encoder Test:");
-  pinMode(D3, INPUT_PULLUP);
-  attachInterrupt(D3, handleKey, RISING);
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  // attachInterrupt(D3, handleKey, RISING);
 
   delay(1000);
   Serial.begin(115200);
@@ -428,6 +479,17 @@ void setup() {
   // setup_wifi();
   client.setServer(mqtt_server, 1883);
   client.setCallback(mqttMessageCallback);
+
+
+
+  // link the myClickFunction function to be called on a click event.
+  button.attachClick(myClickFunction);
+
+  // link the doubleclick function to be called on a doubleclick event.
+  button.attachDoubleClick(myDoubleClickFunction);
+
+  // set 80 msec. debouncing time. Default is 50 msec.
+  button.setDebounceTicks(80);
 }
 
 
@@ -436,16 +498,14 @@ void loop() {
   // Call the Home automation cycle
   cycle();
 
-  // software debounce
-  if (isButtonPressed && millis() - lastUpdateMillis > 50) {
-    isButtonPressed = false;
-    lastUpdateMillis = millis();
-    moveToNextChannel();
-    myEnc.write(channels[channelId]);
-  }
+  // Handle button press
+  button.tick();
 
+  // Expire double click mode
+  doubleClickModeTimeout();
 
   long newPosition = myEnc.read();
+
   if (newPosition != oldPosition) {
 
     if(newPosition < 0){
@@ -460,8 +520,14 @@ void loop() {
         return ;
     }
 
+
     oldPosition = newPosition;
-    channels[channelId] = newPosition;
+    for(int i = (doubleClickModeEnabled ? 0 : channelId); i < (doubleClickModeEnabled ? 8 : channelId + 1); i++){
+      channels[i] = newPosition;
+      Serial.print("Setting channel #");
+      Serial.println(i);
+    }
+
     // Serial.println(newPosition);
     for(int i = 0; i < 8; i++){
         Serial.print(channels[i]);
