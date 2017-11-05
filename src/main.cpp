@@ -368,16 +368,16 @@ void cycle(){
 
 
 void ledOn(){
-  digitalWrite(BUILTIN_LED, 0);
+  digitalWrite(D4, LOW);
 }
 
 void ledOff(){
-  digitalWrite(BUILTIN_LED, 1);
+  digitalWrite(D4, HIGH);
 }
 
 
 void enableDoubleClick(){
-  channelId = 0;
+  channelId = -1;
   doubleClickModeEnabled = 1;
   doubleClickEnterTime = millis();
   ledOn();
@@ -385,7 +385,6 @@ void enableDoubleClick(){
 }
 
 void disableDoubleClick(){
-  // channelId = 0;
   doubleClickModeEnabled = 0;
   doubleClickEnterTime = -1;
   ledOff();
@@ -396,8 +395,7 @@ void disableDoubleClick(){
 void myDoubleClickFunction(){
   if(doubleClickModeEnabled == 1){
     Serial.println("Leaving DOUBLECLICK mode on demand");
-    doubleClickModeEnabled = 0;
-    doubleClickEnterTime = -1;
+    disableDoubleClick();
     return ;
   }
 
@@ -412,8 +410,9 @@ void doubleClickModeTimeout(){
   }
 
   long now = millis();
-  if(now < doubleClickEnterTime || now - 100000 > doubleClickEnterTime){
+  if(now < doubleClickEnterTime || now - 10000 > doubleClickEnterTime){
     Serial.println("Leaving DOUBLECLICK mode because of TIMEOUT");
+    channelId = 0;
     disableDoubleClick();
   }
 }
@@ -431,7 +430,8 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Basic Encoder Test:");
 
-  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(D4, OUTPUT);
+  digitalWrite(D4, LOW);
   // attachInterrupt(D3, handleKey, RISING);
 
   delay(1000);
@@ -520,19 +520,37 @@ void loop() {
         return ;
     }
 
-
     oldPosition = newPosition;
-    for(int i = (doubleClickModeEnabled ? 0 : channelId); i < (doubleClickModeEnabled ? 8 : channelId + 1); i++){
-      channels[i] = newPosition;
-      Serial.print("Setting channel #");
-      Serial.println(i);
+    myEnc.write(newPosition);
+
+    if(doubleClickModeEnabled){
+      enableDoubleClick();
+      for(int i = 0; i < 8; i++){
+
+        if(channels[i] == 0){
+          continue;
+        }
+
+        channels[i] = newPosition;
+        Serial.print("Set channel #");
+        Serial.println(i);
+      }
+
+      return notifyChanges();
     }
+
+    channels[channelId] = newPosition;
+    Serial.print("Setting channel #");
+    Serial.print(channelId);
+    Serial.print(" to ");
+    Serial.println(newPosition);
 
     // Serial.println(newPosition);
     for(int i = 0; i < 8; i++){
         Serial.print(channels[i]);
         Serial.print(" ");
     }
+
     notifyChanges();
     Serial.println(" ");
   }
