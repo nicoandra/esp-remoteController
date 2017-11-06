@@ -31,14 +31,6 @@ void handleKey() {
 }
 
 
-void moveToNextChannel(){
-  if(channelId == 7){
-    channelId = 0;
-    return ;
-  }
-  channelId++;
-}
-
 
 char mqtt_server[40] = "192.168.1.106";
 char mqtt_port[6] = "1883";
@@ -170,14 +162,6 @@ String macAddress() {
   return formatted;
 }
 
-/*
-char[] macAsConstChar(){
-  char mac_address[20];
-  WiFi.macAddress().toCharArray(mac_address, 20);
-  return mac_address;
-}
-*/
-
 void announce(){
   if( allowAnnounce == 0){
     return ;
@@ -207,30 +191,75 @@ void announce(){
 }
 
 
-void notifyChanges(){
+int delta = 0;
+int valueInQueue = 0;
+long lastNotificationSentTime = 0;
+void computeChanges(int up){
+  if(up){
+    delta++;
+  } else {
+    delta--;
+  }
+  valueInQueue++;
+}
 
-  lastMsg = millis();
+void forcedNotifyChanges(){
+  if(!delta){
+    return ;
+  }
+  long now = millis();
+  Serial.println("Increase channel " + (String) channelId + " by " + (String) delta);
 
   String mac_address = macAddress();
   char message[2048];
   DynamicJsonBuffer jsonBufferPub;
 
   JsonObject& json = jsonBufferPub.createObject();
-  JsonArray& lights = json.createNestedArray("lights");
-
-  Serial.println(mac_address);
   json["mac_address"] = mac_address;
   json["device_name"] = device_name;
 
-  for(int i = 1; i < 9; i++){
-    lights.add(channels[i - 1]);
-  }
+  JsonObject& data = json.createNestedObject("data");
+  Serial.println(mac_address);
+  data["channel"] = channelId;
+  data["delta"] = delta;
 
   json.printTo(message);
   Serial.print("NotifyChanges: ");
   Serial.println(message);
-  client.publish("/controllers/", message);
+  client.publish("/controllers/deltas/", message);
 
+
+
+
+  valueInQueue = 0;
+  lastNotificationSentTime = now;
+  delta = 0;
+
+
+
+}
+
+void notifyChanges(){
+  if(valueInQueue == 0){
+    return ;
+  }
+
+  long now = millis();
+  if( now < lastNotificationSentTime || lastNotificationSentTime + 100 < now){
+    forcedNotifyChanges();
+  }
+}
+
+
+void moveToNextChannel(){
+  forcedNotifyChanges();
+
+  delta = 0;
+  if(channelId == 7){
+    channelId = 0;
+    return ;
+  }
+  channelId++;
 }
 
 void mqttMessageCallback(char* topicParam, byte* payloadParam, unsigned int length) {
@@ -508,60 +537,18 @@ void loop() {
 
   if (newPosition != oldPosition) {
     int up = newPosition > oldPosition ? 1  : 0;
-    int down = newPosition > oldPosition ? 0  : 1;
+    int down = newPosition < oldPosition ? 1  : 0;
 
-    if(newPosition < 0){
-        newPosition = 0;
-        myEnc.write(newPosition);
-        return ;
+    if(up){
+      Serial.println("Going UP");
+    } else {
+      Serial.println("Going DOWN");
     }
 
-    if(newPosition > 100){
-        newPosition = 100;
-        myEnc.write(newPosition);
-        return ;
-    }
-
-    oldPosition = newPosition;
+    computeChanges(up);
+    oldPosition = newPosition ;
     myEnc.write(newPosition);
-
-    if(doubleClickModeEnabled){
-      enableDoubleClick();
-      for(int i = 0; i < 8; i++){
-
-        if(channels[i] == 0){
-          continue;
-        }
-
-        if(abs(channels[i] - newPosition) > 30){
-          Serial.print("Too much of a diff in  channel #");
-          Serial.println(i);
-          continue;
-          
-        }
-
-
-        channels[i] = newPosition;
-        Serial.print("Set channel #");
-        Serial.println(i);
-      }
-
-      return notifyChanges();
-    }
-
-    channels[channelId] = newPosition;
-    Serial.print("Setting channel #");
-    Serial.print(channelId);
-    Serial.print(" to ");
-    Serial.println(newPosition);
-
-    // Serial.println(newPosition);
-    for(int i = 0; i < 8; i++){
-        Serial.print(channels[i]);
-        Serial.print(" ");
-    }
-
-    notifyChanges();
-    Serial.println(" ");
   }
+
+  notifyChanges();
 }
